@@ -4,87 +4,99 @@
 #include <sys/stat.h>
 #include <string.h>
 #include <time.h>
+#include <stdlib.h>
 
-struct mensaje{
-    int tipoMensaje;
-    char tiempo[20];
-    pid_t pid;
-    char msj[100];
-};
+void buffer(int tipoMensaje, char tiempo[20], pid_t pid, char msj[100], int fd){
+	char buffer[200];
+	snprintf(buffer, sizeof(buffer), "%d|%s|%d|%s\n", tipoMensaje, tiempo, pid, msj);
+	write(fd, buffer, strlen(buffer));
+}
 
-int main(){
-    struct mensaje registro;
-    pid_t pid = getpid();
+void tiempo(char *tiempo_str){
+	time_t t = time(NULL);
+	struct tm tm_info;
+	localtime_r(&t, &tm_info);
+	strftime(tiempo_str, 20, "%H:%M:%S", &tm_info);
+}
 
-    registro.tipoMensaje = 0;
-    registro.pid = pid;
-    registro.tiempo[0] = 0;
-    registro.msj[0] = 0;
+void registro();
+void leer(int fo){
+	char rcv_buffer[200];
+	ssize_t n = read(fo, rcv_buffer, sizeof(rcv_buffer)-1);
+	if(n > 0){
+		rcv_buffer[n] = '\0';
+		printf("%s", rcv_buffer);
+	} else{
+		usleep(100000);
+	}
+}
 
-    // Abrir FIFO de entrada del servidor
+void escribir(int fd, int fo, pid_t pid){
+    	    char mensaje[100];
+	    char tiempo_str[20];
+	    tiempo(tiempo_str);
+            fgets(mensaje, sizeof(mensaje), stdin);
+            mensaje[strcspn(mensaje, "\n")] = 0;
+
+            if(strcmp(mensaje, "/report") == 0){
+                printf("Ingrese el PID de usuario que desea reportar:");
+                fgets(mensaje, sizeof(mensaje), stdin);
+                mensaje[strcspn(mensaje, "\n")] = 0;
+		buffer(2, tiempo_str, pid, mensaje, fd);
+
+            } else if(strcmp(mensaje, "/exit") == 0){
+                strcpy(mensaje, "Desconexión");
+		buffer(3, tiempo_str, pid, mensaje, fd);
+                usleep(100000);
+                close(fd);
+                close(fo);
+                exit(0);
+
+            } else if(strcmp(mensaje, "/clonar") == 0){
+        		    pid_t clone = fork();
+        		    if (clone == 0){
+        	    	        registro();
+                        }
+            } else{
+        		buffer(1, tiempo_str, pid, mensaje, fd);
+            }
+}
+
+void registro(){
+    pid_t pid = getpid();  // PID correcto del proceso que está ejecutando registro
+
     int fd = open("/tmp/chat_in", O_WRONLY);
     if(fd == -1){
-        perror("Abrir fifo chat_in");
-        return 1;
+        perror("No se ha iniciado servidor");
+        return;
     }
-    printf("Cliente: PID=%d, fifo chat_in abierto, fd=%d\n", pid, fd);
 
-    // Enviar registro al servidor
-    char reg_msg[50];
-    snprintf(reg_msg, sizeof(reg_msg), "%d| |%d|\n", registro.tipoMensaje, registro.pid);
-    int w = write(fd, reg_msg, strlen(reg_msg));
-    printf("Cliente: registro enviado '%s', bytes=%d\n", reg_msg, w);
+    buffer(0, 0, pid,  0, fd);  // registro con PID real del proceso
 
-    // Fork: hijo lee mensajes, padre envía
-    pid_t child = fork();
+    pid_t child = fork(); // fork para lector/escritor
 
-    // FIFO de salida (del servidor hacia este cliente)
-	char fifo_out[50];
-	snprintf(fifo_out, sizeof(fifo_out), "/tmp/chat_out_%d", pid);
-
-	int fo;
-	while ((fo = open(fifo_out, O_RDONLY)) == -1) {
-		usleep(100000); // espera 0.1s
-	}
-	printf("Cliente: fifo_out abierto, fd=%d\n", fo);	
+    char fifo_out[50];
+    snprintf(fifo_out, sizeof(fifo_out), "/tmp/chat_out_%d", pid);
+    int fo;
+    while ((fo = open(fifo_out, O_RDONLY)) == -1) {
+        usleep(100000);
+    }
 
     if(child == 0){
-        // Hijo: recibe mensajes
-        char rcv_buffer[200];
+	close(fd);
         while(1){
-            ssize_t n = read(fo, rcv_buffer, sizeof(rcv_buffer)-1);
-            if(n > 0){
-                rcv_buffer[n] = '\0';
-                printf("Cliente hijo: recibido '%s'\n", rcv_buffer);
-            } else {
-                // Esto ayuda a ver si no llega nada
-                // no bloquear CPU con sleep muy largo
-                usleep(100000);
-            }
+            leer(fo);
         }
     } else {
-        // Padre: envía mensajes
-        struct mensaje msj;
-        msj.pid = pid;
-        msj.tipoMensaje = 1; // mensaje normal
+	close(fo);
         while(1){
-            fgets(msj.msj, sizeof(msj.msj), stdin);
-            msj.msj[strcspn(msj.msj, "\n")] = 0;
-
-            time_t t = time(NULL);
-            struct tm tm_info;
-            localtime_r(&t, &tm_info);
-            strftime(msj.tiempo, sizeof(msj.tiempo), "%H:%M:%S", &tm_info);
-
-            char send_buffer[200];
-            snprintf(send_buffer, sizeof(send_buffer), "%d|%s|%d|%s\n",
-                     msj.tipoMensaje, msj.tiempo, msj.pid, msj.msj);
-            int w = write(fd, send_buffer, strlen(send_buffer));
-            printf("Cliente padre: enviado '%s', bytes=%d\n", send_buffer, w);
+            escribir(fd, fo, pid); // pasa PID real del proceso
         }
     }
+}
 
-    close(fd);
-    close(fo);
+
+int main(){
+    registro();
     return 0;
 }
