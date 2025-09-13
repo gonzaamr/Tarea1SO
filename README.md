@@ -15,6 +15,7 @@ El servidor centraliza la comunicación: cada usuario se conecta enviando un men
 <p align="center">
   <img src="diagrama" alt="Texto alternativo" width="400">
 </p>
+
 ## Casos borde y soluciones
 
 - **Desconexión de usuarios:** se elimina el FIFO correspondiente para evitar errores.  
